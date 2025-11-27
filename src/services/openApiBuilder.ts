@@ -38,11 +38,13 @@ export function buildOpenApiFromRoutes(
     const method = normalizeMethod(route.method);
     if (!method) continue;
 
+    const pathItem =
+      (document.paths[route.path] as OpenAPIV3_1.PathItemObject | undefined) ??
+      ({} as OpenAPIV3_1.PathItemObject);
     if (!document.paths[route.path]) {
-      document.paths[route.path] = {};
+      document.paths[route.path] = pathItem;
     }
 
-    // @ts-ignore
     const operation: OpenAPIV3_1.OperationObject = {
       summary: route.summary,
       description: `自动从 ${route.sourceFile}:${route.line} 生成 (${route.origin})`,
@@ -53,14 +55,16 @@ export function buildOpenApiFromRoutes(
             options.defaultResponseDescription ?? DEFAULT_RESPONSE_DESCRIPTION,
         },
       },
-      'x-apifox-folder': route.folder
-        ? route.folder.split(path.sep).join(' / ')
-        : undefined,
       operationId: buildOperationId(route, method),
     };
 
-    (document.paths[route.path] as OpenAPIV3_1.PathItemObject)[method] =
-      operation;
+    if (route.folder) {
+      // 扩展字段 x-apifox-folder 并不在官方类型定义中，这里用索引方式附加
+      (operation as Record<string, unknown>)['x-apifox-folder'] =
+        route.folder.split(path.sep).join(' / ');
+    }
+
+    (pathItem as Record<string, unknown>)[method] = operation;
 
     if (route.tag) tagSet.add(route.tag);
   }
@@ -72,14 +76,16 @@ export function buildOpenApiFromRoutes(
   return document;
 }
 
-function normalizeMethod(method: HttpMethod): keyof OpenAPIV3_1.PathItemObject | undefined {
-  if (method === 'all') return 'get';
-  return method as keyof OpenAPIV3_1.PathItemObject;
+function normalizeMethod(
+  method: HttpMethod
+): OpenAPIV3_1.HttpMethods | undefined {
+  if (method === 'all') return 'get' as OpenAPIV3_1.HttpMethods;
+  return method as OpenAPIV3_1.HttpMethods;
 }
 
 function buildOperationId(
   route: ControllerRoute,
-  method: keyof OpenAPIV3_1.PathItemObject
+  method: OpenAPIV3_1.HttpMethods
 ): string {
   const sanitizedPath = route.path
     .replace(/\{([^}]+)\}/g, '_$1_')

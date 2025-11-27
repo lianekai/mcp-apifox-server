@@ -55,43 +55,57 @@ export function registerExportOpenApiTool(server: McpServer): void {
       inputSchema: exportInputSchema,
     },
     async (args: ExportOpenApiParams) => {
-      const client = new ApifoxClient();
-      const result = await client.exportOpenApi({
-        projectId: args.projectId,
-        scope: {
-          type: args.scopeType,
-          includedByTags: args.includedByTags,
-          excludedByTags: args.excludedByTags,
-          folderIds: args.folderIds,
-        },
-        options: {
-          includeApifoxExtensionProperties: args.includeExtensions,
-          addFoldersToTags: args.addFoldersToTags,
-        },
-        oasVersion: args.oasVersion,
-        exportFormat: args.exportFormat,
-        branchId: args.branchId,
-        moduleId: args.moduleId,
-        locale: args.locale,
-      });
-
-      const payload =
-        typeof result === 'string'
-          ? result
-          : JSON.stringify(result, null, 2);
-
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `已从 Apifox 导出 OpenAPI（格式：${args.exportFormat}）。`,
+      try {
+        const client = new ApifoxClient();
+        const result = await client.exportOpenApi({
+          projectId: args.projectId,
+          scope: {
+            type: args.scopeType,
+            includedByTags: args.includedByTags,
+            excludedByTags: args.excludedByTags,
+            folderIds: args.folderIds,
           },
-          {
-            type: 'text' as const,
-            text: payload,
+          options: {
+            includeApifoxExtensionProperties: args.includeExtensions,
+            addFoldersToTags: args.addFoldersToTags,
           },
-        ],
-      };
+          oasVersion: args.oasVersion,
+          exportFormat: args.exportFormat,
+          branchId: args.branchId,
+          moduleId: args.moduleId,
+          locale: args.locale,
+        });
+
+        const payload =
+          typeof result === 'string'
+            ? result
+            : JSON.stringify(result, null, 2);
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `已从 Apifox 导出 OpenAPI（格式：${args.exportFormat}）。`,
+            },
+            {
+              type: 'text' as const,
+              text: payload,
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text' as const,
+              text: `导出 OpenAPI 失败：${
+                (err as Error)?.message ?? String(err)
+              }`,
+            },
+          ],
+        };
+      }
     }
   );
 }

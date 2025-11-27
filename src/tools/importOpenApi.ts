@@ -5,12 +5,19 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import { ApifoxClient } from '../services/apifoxClient.js';
+import type { ImportOpenApiResultCounters } from '../services/apifoxClient.js';
 
-const overwriteBehaviorEnum = z.enum([
+const endpointOverwriteBehaviorEnum = z.enum([
   'OVERWRITE_EXISTING',
   'IGNORE_EXISTING',
   'KEEP_BOTH',
   'SMART_MERGE',
+]);
+
+const schemaOverwriteBehaviorEnum = z.enum([
+  'OVERWRITE_EXISTING',
+  'IGNORE_EXISTING',
+  'KEEP_BOTH',
 ]);
 
 const importInputSchema = {
@@ -28,12 +35,12 @@ const importInputSchema = {
     .string()
     .describe('OpenAPI/Swagger 文件路径，当 openapi 为空时读取该文件')
     .optional(),
-  endpointOverwriteBehavior: overwriteBehaviorEnum
+  endpointOverwriteBehavior: endpointOverwriteBehaviorEnum
     .describe('接口覆盖策略')
     .default('SMART_MERGE'),
-  schemaOverwriteBehavior: overwriteBehaviorEnum
+  schemaOverwriteBehavior: schemaOverwriteBehaviorEnum
     .describe('数据模型覆盖策略')
-    .default('SMART_MERGE'),
+    .default('OVERWRITE_EXISTING'),
   updateFolderOfChangedEndpoint: z
     .boolean()
     .describe('是否同步更新接口所在目录')
@@ -159,7 +166,7 @@ async function readFileIfNeeded(filePath?: string): Promise<string | undefined> 
 }
 
 function formatCounters(
-  counters?: Record<string, number>
+  counters?: ImportOpenApiResultCounters
 ): string {
   if (!counters) return '已成功触发导入，Apifox 将在客户端显示详细日志。';
   const lines = Object.entries(counters)

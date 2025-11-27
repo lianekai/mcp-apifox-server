@@ -86,31 +86,48 @@ export function registerRunCliTestTool(server: McpServer): void {
       }
 
       const cliArgs = buildCliArgs(args, config.projectId, config.accessToken);
-      const result = await runCommand(config.cliExecutable, cliArgs, {
-        cwd: args.workingDirectory ?? process.cwd(),
-        timeoutMs: args.timeoutMs,
-      });
+      try {
+        const result = await runCommand(config.cliExecutable, cliArgs, {
+          cwd: args.workingDirectory ?? process.cwd(),
+          timeoutMs: args.timeoutMs,
+        });
 
-      if (result.code !== 0) {
+        if (result.code !== 0) {
+          return {
+            isError: true,
+            content: [
+              { type: 'text' as const, text: result.stdout.trim() },
+              { type: 'text' as const, text: result.stderr.trim() },
+              {
+                type: 'text' as const,
+                text: `apifox-cli 退出码 ${result.code}`,
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: result.stdout.trim() || '执行成功',
+            },
+            { type: 'text' as const, text: result.stderr.trim() },
+          ],
+        };
+      } catch (error) {
         return {
           isError: true,
           content: [
-            { type: 'text' as const, text: result.stdout.trim() },
-            { type: 'text' as const, text: result.stderr.trim() },
             {
               type: 'text' as const,
-              text: `apifox-cli 退出码 ${result.code}`,
+              text: `apifox-cli 执行失败：${
+                (error as Error)?.message ?? String(error)
+              }`,
             },
           ],
         };
       }
-
-      return {
-        content: [
-          { type: 'text' as const, text: result.stdout.trim() || '执行成功' },
-          { type: 'text' as const, text: result.stderr.trim() },
-        ],
-      };
     }
   );
 }

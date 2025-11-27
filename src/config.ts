@@ -25,6 +25,8 @@ const DEFAULTS: ApifoxConfig = {
 const runtimeOverrides: Partial<ApifoxConfig> = {};
 
 const argv = yargs(hideBin(process.argv))
+  .help(false)
+  .version(false)
   .option('accessToken', {
     type: 'string',
     describe: 'Apifox Access Token (Bearer)',
@@ -32,6 +34,10 @@ const argv = yargs(hideBin(process.argv))
   .option('projectId', {
     type: 'string',
     describe: 'Apifox 项目 ID',
+  })
+  .option('project', {
+    type: 'string',
+    describe: 'Apifox 项目 ID（与 --projectId 等价，兼容官方 apifox-mcp-server）',
   })
   .option('apiVersion', {
     type: 'string',
@@ -52,10 +58,7 @@ const argv = yargs(hideBin(process.argv))
   .option('version', {
     type: 'boolean',
     describe: '打印版本信息',
-  })
-  .help(false)
-  .version(false)
-  .parseSync();
+  }).parseSync();
 
 export function setConfig(partial: Partial<ApifoxConfig>): void {
   Object.assign(runtimeOverrides, partial);
@@ -72,9 +75,14 @@ function resolveValue(key: keyof ApifoxConfig, envKey: string): string {
 }
 
 export function getConfig(): ApifoxConfig {
+  // 支持 --project 参数（兼容官方 apifox-mcp-server），优先级：--project > --projectId > 环境变量
+  const projectId = 
+    (argv.project as string | undefined) ??
+    resolveValue('projectId', 'APIFOX_PROJECT_ID');
+  
   return {
     accessToken: resolveValue('accessToken', 'APIFOX_ACCESS_TOKEN'),
-    projectId: resolveValue('projectId', 'APIFOX_PROJECT_ID'),
+    projectId,
     apiVersion: resolveValue('apiVersion', 'APIFOX_API_VERSION'),
     apiBaseUrl: resolveValue('apiBaseUrl', 'APIFOX_API_BASE_URL'),
     locale: resolveValue('locale', 'APIFOX_LOCALE'),

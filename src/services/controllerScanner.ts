@@ -270,7 +270,12 @@ function normalizePath(base: string, addition: string): string {
   const combined = segments.join('/');
   const sanitized = combined.replace(/\\+/g, '/').replace(/\/+/g, '/');
   const normalized = sanitized.startsWith('/') ? sanitized : `/${sanitized}`;
-  return normalized.replace(/\/+/g, '/');
+  const once = normalized.replace(/\/+/g, '/');
+  // 保持根路径为 "/"，其余路径去掉末尾多余斜杠，保证 OpenAPI key 稳定
+  if (once.length > 1 && once.endsWith('/')) {
+    return once.slice(0, -1);
+  }
+  return once;
 }
 
 function buildSummary(params: {
@@ -285,11 +290,18 @@ function buildSummary(params: {
 function extractJSDocSummary(node: ts.Node): string | undefined {
   const tags = ts.getJSDocCommentsAndTags(node);
   if (!tags.length) return undefined;
-  const comment = tags
-    .map((tag) => ('comment' in tag ? tag.comment : undefined))
-    .find((text) => Boolean(text));
-  if (!comment || Array.isArray(comment)) return undefined;
-  return comment;
+  const rawComment = tags
+    .map((tag) => {
+      const anyTag = tag as { comment?: string | ts.NodeArray<ts.JSDocComment> };
+      return anyTag.comment;
+    })
+    .find((text) => text !== undefined);
+
+  if (typeof rawComment === 'string') {
+    return rawComment;
+  }
+
+  return undefined;
 }
 
 function deriveFolder(filePath: string, cwd: string): string | undefined {
