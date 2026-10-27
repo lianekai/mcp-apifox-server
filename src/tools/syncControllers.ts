@@ -6,19 +6,10 @@ import { z } from 'zod';
 import { ApifoxClient } from '../services/apifoxClient.js';
 import { buildOpenApiFromRoutes } from '../services/openApiBuilder.js';
 import { scanControllers } from '../services/controllerScanner.js';
+import { overwriteBehaviorSchema } from '../services/importPolicies.js';
 
-const endpointBehaviorEnum = z.enum([
-  'OVERWRITE_EXISTING',
-  'IGNORE_EXISTING',
-  'KEEP_BOTH',
-  'SMART_MERGE',
-]);
-
-const schemaBehaviorEnum = z.enum([
-  'OVERWRITE_EXISTING',
-  'IGNORE_EXISTING',
-  'KEEP_BOTH',
-]);
+const endpointBehaviorEnum = overwriteBehaviorSchema;
+const schemaBehaviorEnum = overwriteBehaviorSchema;
 
 const syncInputSchema = {
   projectRoot: z.string().describe('项目根目录，默认当前工作目录').optional(),
@@ -39,14 +30,17 @@ const syncInputSchema = {
   projectId: z.string().describe('Apifox 项目 ID').optional(),
   endpointOverwriteBehavior: endpointBehaviorEnum
     .describe('导入时接口覆盖策略')
-    .default('SMART_MERGE'),
+    .default('AUTO_MERGE'),
   schemaOverwriteBehavior: schemaBehaviorEnum
     .describe('导入时数据模型覆盖策略')
-    .default('OVERWRITE_EXISTING'),
+    .default('AUTO_MERGE'),
+  targetBranchId: z.number().int().positive().optional(),
+  moduleId: z.number().int().positive().optional(),
   dryRun: z
     .boolean()
     .describe('若为 true，只生成 OpenAPI，不调用 Apifox')
-    .default(false),
+    .default(true),
+  confirm: z.boolean().default(false).describe('写入或覆盖前的明确用户确认；dryRun=false 时必填 true'),
 };
 
 const syncSchema = z.object(syncInputSchema);
@@ -61,6 +55,7 @@ export function registerSyncControllersTool(server: McpServer): void {
       description:
         '组合控制器扫描 + OpenAPI 构建 + Apifox 导入，实现增量或智能合并',
       inputSchema: syncInputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     async (args: SyncControllersParams) => {
       const cwd = args.projectRoot
@@ -108,15 +103,19 @@ export function registerSyncControllersTool(server: McpServer): void {
       }
 
       try {
+        if (!args.dryRun && !args.confirm) {
+          throw new Error('同步/覆盖需要用户明确确认；请先 dryRun 预览，再传 dryRun=false 和 confirm=true。');
+        }
         const client = new ApifoxClient();
         const response = await client.importOpenApi({
           projectId: args.projectId,
-          input: { content: documentString },
+          input: documentString,
           options: {
             endpointOverwriteBehavior: args.endpointOverwriteBehavior,
             schemaOverwriteBehavior: args.schemaOverwriteBehavior,
-            intelligentMerge: args.endpointOverwriteBehavior === 'SMART_MERGE',
-            updateFolderOfChangedEndpoint: true,
+            targetBranchId: args.targetBranchId,
+            moduleId: args.moduleId,
+            updateFolderOfChangedEndpoint: false,
             prependBasePath: false,
           },
         });

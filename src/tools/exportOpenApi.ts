@@ -6,7 +6,7 @@ import { ApifoxClient } from '../services/apifoxClient.js';
 const exportInputSchema = {
   projectId: z.string().describe('Apifox 项目 ID，默认读取配置').optional(),
   scopeType: z
-    .enum(['ALL', 'TAGS', 'FOLDERS'])
+    .enum(['ALL', 'SELECTED_TAGS', 'SELECTED_FOLDERS', 'SELECTED_ENDPOINTS', 'TAGS', 'FOLDERS'])
     .describe('导出范围类型')
     .default('ALL'),
   includedByTags: z
@@ -17,6 +17,9 @@ const exportInputSchema = {
     .array(z.string())
     .describe('排除指定标签的接口')
     .optional(),
+  selectedTags: z.array(z.string()).optional(),
+  selectedFolderIds: z.array(z.number().int().nonnegative()).optional(),
+  selectedEndpointIds: z.array(z.number().int().positive()).optional(),
   folderIds: z
     .array(z.number())
     .describe('导出指定分组 ID 列表（scopeType = FOLDERS）')
@@ -64,6 +67,9 @@ export function registerExportOpenApiTool(server: McpServer): void {
             includedByTags: args.includedByTags,
             excludedByTags: args.excludedByTags,
             folderIds: args.folderIds,
+            selectedTags: args.selectedTags,
+            selectedFolderIds: args.selectedFolderIds,
+            selectedEndpointIds: args.selectedEndpointIds,
           },
           options: {
             includeApifoxExtensionProperties: args.includeExtensions,

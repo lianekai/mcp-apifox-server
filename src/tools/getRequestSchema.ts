@@ -3,8 +3,11 @@ import { z } from 'zod';
 import type { OpenAPIV3_1 } from 'openapi-types';
 
 import { loadOpenApiDocument } from '../services/openApiDocument.js';
+import { normalizeMethod } from '../utils/httpMethods.js';
+import { openApiReadScope } from './openApiReadInput.js';
 
 const requestInputSchema = {
+  ...openApiReadScope,
   path: z
     .string()
     .min(1, 'path 不能为空')
@@ -28,24 +31,6 @@ const requestSchema = z.object(requestInputSchema);
 
 export type GetRequestSchemaParams = z.infer<typeof requestSchema>;
 
-function normalizeMethod(
-  method: string
-): keyof OpenAPIV3_1.PathItemObject | undefined {
-  const lower = method.toLowerCase();
-  const supported: (keyof OpenAPIV3_1.PathItemObject)[] = [
-    'get',
-    'post',
-    'put',
-    'delete',
-    'patch',
-    'options',
-    'head',
-  ];
-  return supported.includes(lower as keyof OpenAPIV3_1.PathItemObject)
-    ? (lower as keyof OpenAPIV3_1.PathItemObject)
-    : undefined;
-}
-
 export function registerGetRequestSchemaTool(server: McpServer): void {
   server.registerTool(
     'apifox_get_request_schema',
@@ -58,6 +43,9 @@ export function registerGetRequestSchemaTool(server: McpServer): void {
     async (args: GetRequestSchemaParams) => {
       try {
         const document = await loadOpenApiDocument({
+          projectId: args.projectId,
+          branchId: args.branchId,
+          moduleId: args.moduleId,
           locale: args.locale,
           forceRefresh: args.forceRefresh,
         });

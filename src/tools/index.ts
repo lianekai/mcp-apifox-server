@@ -10,8 +10,12 @@ import { registerSearchOpenApiTool } from './searchOpenApi.js';
 import { registerSyncControllersTool } from './syncControllers.js';
 import { registerRunCliTestTool } from './runCliTest.js';
 import { registerProjectOasTools } from './projectOas.js';
+import { registerProjectTools } from './projects.js';
+import { registerEndpointTools } from './endpoints.js';
 
 export function registerTools(server: McpServer): void {
+  registerProjectTools(server);
+  registerEndpointTools(server);
   // 兼容官方 apifox-mcp-server 的三大核心工具（read/refresh_project_oas_* 系列）
   registerProjectOasTools(server);
 

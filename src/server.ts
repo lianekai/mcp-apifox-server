@@ -9,7 +9,6 @@ import { registerTools } from './tools/index.js';
 function validateConfig(config: ApifoxConfig): void {
   const missing: string[] = [];
   if (!config.accessToken) missing.push('APIFOX_ACCESS_TOKEN');
-  if (!config.projectId) missing.push('APIFOX_PROJECT_ID');
   if (missing.length > 0) {
     logger.warn(
       {

@@ -1,9 +1,14 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 export interface RunCommandOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  maxOutputBytes?: number;
+  captureStdoutToFile?: boolean;
 }
 
 export interface RunCommandResult {
@@ -12,44 +17,100 @@ export interface RunCommandResult {
   code: number | null;
 }
 
-export function runCommand(
+export async function runCommand(
   command: string,
   args: string[],
-  options: RunCommandOptions = {}
+  options: RunCommandOptions = {},
 ): Promise<RunCommandResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: { ...process.env, ...options.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+  const maxOutputBytes = options.maxOutputBytes ?? 8 * 1024 * 1024;
+  const directory = options.captureStdoutToFile
+    ? await fs.mkdtemp(path.join(os.tmpdir(), 'apifox-output-'))
+    : undefined;
+  let outputFile: fs.FileHandle | undefined;
+  try {
+    if (directory)
+      outputFile = await fs.open(path.join(directory, 'stdout'), 'w+', 0o600);
+    const result = await new Promise<RunCommandResult>((resolve, reject) => {
+      const child = spawn(command, args, {
+        cwd: options.cwd,
+        env: { ...process.env, ...options.env },
+        stdio: ['ignore', outputFile?.fd ?? 'pipe', 'pipe'],
+      });
 
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let outputBytes = 0;
+      let failure: Error | undefined;
+      const collectOutput = (chunks: Buffer[], chunk: Buffer): void => {
+        if (failure) return;
+        outputBytes += chunk.length;
+        if (outputBytes > maxOutputBytes) {
+          failure = new Error(`命令输出超过限制 (${maxOutputBytes} bytes)`);
+          child.kill('SIGKILL');
+          return;
+        }
+        chunks.push(chunk);
+      };
 
-    child.stdout?.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
-    child.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+      child.stdout?.on('data', (chunk: Buffer) =>
+        collectOutput(stdoutChunks, chunk),
+      );
+      child.stderr?.on('data', (chunk: Buffer) =>
+        collectOutput(stderrChunks, chunk),
+      );
 
-    let timeout: NodeJS.Timeout | undefined;
-    if (options.timeoutMs) {
-      timeout = setTimeout(() => {
-        child.kill('SIGTERM');
-        reject(new Error(`命令超时 (${options.timeoutMs}ms): ${command}`));
-      }, options.timeoutMs);
-    }
+      let timeout: NodeJS.Timeout | undefined;
+      const outputMonitor = outputFile
+        ? setInterval(() => {
+            void outputFile
+              ?.stat()
+              .then((stat) => {
+                if (!failure && stat.size + outputBytes > maxOutputBytes) {
+                  failure = new Error(
+                    `命令输出超过限制 (${maxOutputBytes} bytes)`,
+                  );
+                  child.kill('SIGKILL');
+                }
+              })
+              .catch(() => {});
+          }, 50)
+        : undefined;
+      if (options.timeoutMs) {
+        timeout = setTimeout(() => {
+          failure = new Error(`命令超时 (${options.timeoutMs}ms): ${command}`);
+          child.kill('SIGKILL');
+        }, options.timeoutMs);
+      }
 
-    child.on('close', (code) => {
-      if (timeout) clearTimeout(timeout);
-      resolve({
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-        code,
+      child.on('close', (code) => {
+        if (timeout) clearTimeout(timeout);
+        if (outputMonitor) clearInterval(outputMonitor);
+        if (failure) {
+          reject(failure);
+          return;
+        }
+        resolve({
+          stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+          stderr: Buffer.concat(stderrChunks).toString('utf8'),
+          code,
+        });
+      });
+
+      child.on('error', (error) => {
+        if (timeout) clearTimeout(timeout);
+        if (outputMonitor) clearInterval(outputMonitor);
+        reject(error);
       });
     });
-
-    child.on('error', (error) => {
-      if (timeout) clearTimeout(timeout);
-      reject(error);
-    });
-  });
+    if (outputFile && directory) {
+      const stat = await outputFile.stat();
+      if (stat.size + Buffer.byteLength(result.stderr) > maxOutputBytes)
+        throw new Error(`命令输出超过限制 (${maxOutputBytes} bytes)`);
+      result.stdout = await fs.readFile(path.join(directory, 'stdout'), 'utf8');
+    }
+    return result;
+  } finally {
+    await outputFile?.close();
+    if (directory) await fs.rm(directory, { recursive: true, force: true });
+  }
 }

@@ -7,18 +7,12 @@ import { runCommand } from '../utils/process.js';
 const uploadReportEnum = z.enum(['none', 'simple', 'detail']);
 
 const runInputSchema = {
-  scenarioId: z
-    .number()
-    .describe('Apifox 测试场景 ID ( -t )')
-    .optional(),
+  scenarioId: z.number().describe('Apifox 测试场景 ID ( -t )').optional(),
   collectionId: z
     .number()
     .describe('集合 ID ( -c )，可与 scenarioId 二选一')
     .optional(),
-  environmentId: z
-    .number()
-    .describe('环境 ID ( -e )')
-    .optional(),
+  environmentId: z.number().describe('环境 ID ( -e )').optional(),
   iterationCount: z
     .number()
     .int()
@@ -32,14 +26,8 @@ const runInputSchema = {
   uploadReport: uploadReportEnum
     .describe('是否上传测试报告 (--upload-report)')
     .default('none'),
-  timeoutMs: z
-    .number()
-    .describe('命令超时时间，毫秒')
-    .optional(),
-  workingDirectory: z
-    .string()
-    .describe('执行 CLI 的工作目录')
-    .optional(),
+  timeoutMs: z.number().describe('命令超时时间，毫秒').optional(),
+  workingDirectory: z.string().describe('执行 CLI 的工作目录').optional(),
   extraArgs: z
     .array(z.string())
     .describe('附加 CLI 参数，将原样追加在命令最后')
@@ -87,10 +75,15 @@ export function registerRunCliTestTool(server: McpServer): void {
 
       const cliArgs = buildCliArgs(args, config.projectId, config.accessToken);
       try {
-        const result = await runCommand(config.cliExecutable, cliArgs, {
-          cwd: args.workingDirectory ?? process.cwd(),
-          timeoutMs: args.timeoutMs,
-        });
+        const isJavaScriptEntry = /\.[cm]?js$/i.test(config.cliExecutable);
+        const result = await runCommand(
+          isJavaScriptEntry ? process.execPath : config.cliExecutable,
+          isJavaScriptEntry ? [config.cliExecutable, ...cliArgs] : cliArgs,
+          {
+            cwd: args.workingDirectory ?? process.cwd(),
+            timeoutMs: args.timeoutMs,
+          },
+        );
 
         if (result.code !== 0) {
           return {
@@ -128,14 +121,14 @@ export function registerRunCliTestTool(server: McpServer): void {
           ],
         };
       }
-    }
+    },
   );
 }
 
 function buildCliArgs(
   args: RunCliTestParams,
   projectId: string,
-  accessToken: string
+  accessToken: string,
 ): string[] {
   const cliArgs = ['run', '--access-token', accessToken];
   if (projectId) {

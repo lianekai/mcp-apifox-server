@@ -3,8 +3,11 @@ import { z } from 'zod';
 import type { OpenAPIV3_1 } from 'openapi-types';
 
 import { loadOpenApiDocument } from '../services/openApiDocument.js';
+import { httpMethods } from '../utils/httpMethods.js';
+import { openApiReadScope } from './openApiReadInput.js';
 
 const searchInputSchema = {
+  ...openApiReadScope,
   keyword: z
     .string()
     .min(1, 'keyword 不能为空')
@@ -54,21 +57,11 @@ function searchDocument(
 
   const paths = document.paths ?? {};
 
-  const methods: (keyof OpenAPIV3_1.PathItemObject)[] = [
-    'get',
-    'post',
-    'put',
-    'delete',
-    'patch',
-    'options',
-    'head',
-  ];
-
   for (const [pathKey, pathItem] of Object.entries(paths)) {
     if (!pathItem) continue;
     const typedPathItem = pathItem as OpenAPIV3_1.PathItemObject;
 
-    for (const method of methods) {
+    for (const method of httpMethods) {
       const op = typedPathItem[method];
       if (!op) continue;
 
@@ -122,6 +115,9 @@ export function registerSearchOpenApiTool(server: McpServer): void {
     async (args: SearchOpenApiParams) => {
       try {
         const document = await loadOpenApiDocument({
+          projectId: args.projectId,
+          branchId: args.branchId,
+          moduleId: args.moduleId,
           locale: args.locale,
           forceRefresh: args.forceRefresh,
         });

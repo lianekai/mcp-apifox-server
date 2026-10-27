@@ -3,6 +3,9 @@ import fetch, { Headers } from 'node-fetch';
 
 import { getConfig, type ApifoxConfig } from '../config.js';
 import { logger } from '../utils/logger.js';
+import { redactSecrets } from '../utils/redact.js';
+import { invalidateOpenApiCache } from './openApiCache.js';
+import { normalizeOverwriteBehavior, type OverwriteBehavior } from './importPolicies.js';
 
 export class ApifoxRequestError extends Error {
   constructor(
@@ -18,10 +21,13 @@ export class ApifoxRequestError extends Error {
 export interface ExportOpenApiParams {
   projectId?: string;
   scope?: {
-    type: 'ALL' | 'TAGS' | 'FOLDERS';
+    type: 'ALL' | 'TAGS' | 'FOLDERS' | 'SELECTED_TAGS' | 'SELECTED_FOLDERS' | 'SELECTED_ENDPOINTS';
     includedByTags?: string[];
     excludedByTags?: string[];
     folderIds?: number[];
+    selectedTags?: string[];
+    selectedFolderIds?: number[];
+    selectedEndpointIds?: number[];
   };
   options?: {
     includeApifoxExtensionProperties?: boolean;
@@ -37,6 +43,7 @@ export interface ExportOpenApiParams {
 export interface ImportOpenApiParams {
   projectId?: string;
   input:
+    | string
     | {
         content: string;
       }
@@ -50,23 +57,19 @@ export interface ImportOpenApiParams {
   options?: {
     targetEndpointFolderId?: number;
     targetSchemaFolderId?: number;
-    endpointOverwriteBehavior?:
-      | 'OVERWRITE_EXISTING'
-      | 'IGNORE_EXISTING'
-      | 'KEEP_BOTH'
-      | 'SMART_MERGE';
-    schemaOverwriteBehavior?:
-      | 'OVERWRITE_EXISTING'
-      | 'IGNORE_EXISTING'
-      | 'KEEP_BOTH';
+    endpointOverwriteBehavior?: OverwriteBehavior;
+    schemaOverwriteBehavior?: OverwriteBehavior;
     updateFolderOfChangedEndpoint?: boolean;
     prependBasePath?: boolean;
     intelligentMerge?: boolean;
+    targetBranchId?: number;
+    moduleId?: number;
   };
   locale?: string;
 }
 
 export interface ImportOpenApiResultCounters {
+  [key: string]: number;
   endpointCreated: number;
   endpointUpdated: number;
   endpointFailed: number;
@@ -78,8 +81,10 @@ export interface ImportOpenApiResultCounters {
 }
 
 export interface ImportOpenApiResponse {
+  success?: boolean;
   data?: {
     counters?: ImportOpenApiResultCounters;
+    errors?: Array<{ code: string | number; message: string }>;
   };
 }
 
@@ -123,12 +128,23 @@ export class ApifoxClient {
       'Apifox API 请求'
     );
 
-    const response = await fetch(url, {
-      ...init,
-      headers: this.buildHeaders(init.headers as HeadersInit | undefined),
-    });
+    let response;
+    try {
+      response = await fetch(url, {
+        ...init,
+        headers: this.buildHeaders(init.headers as HeadersInit | undefined),
+        signal: AbortSignal.timeout(30000),
+        redirect: 'error',
+        size: 32 * 1024 * 1024,
+      });
+    } catch (error) {
+      throw new ApifoxRequestError(redactSecrets(
+        `Apifox API 请求失败：${error instanceof Error ? error.message : String(error)}`,
+        this.config.accessToken
+      ), 0);
+    }
 
-    const text = await response.text();
+    const text = redactSecrets(await response.text(), this.config.accessToken);
     let payload: unknown;
 
     logger.debug(
@@ -190,15 +206,19 @@ export class ApifoxClient {
           url: url.toString(),
           status: response.status,
           statusText: response.statusText,
-          payload,
+          hasPayload: payload !== undefined,
         },
         'Apifox API 请求失败'
       );
       throw new ApifoxRequestError(
-        `Apifox API 请求失败 ${response.status}: ${response.statusText}`,
+        `Apifox API 请求失败 ${response.status}: ${text.slice(0, 1500)}`,
         response.status,
         payload
       );
+    }
+
+    if (payload && typeof payload === 'object' && 'success' in payload && payload.success === false) {
+      throw new ApifoxRequestError(`Apifox 业务失败：${text.slice(0, 1500)}`, response.status, payload);
     }
 
     // 如果 payload 是 undefined，记录警告并返回空对象
@@ -222,8 +242,21 @@ export class ApifoxClient {
       throw new Error('缺少 projectId，无法导出 OpenAPI');
     }
 
+    const scope = params.scope ?? { type: 'ALL' as const };
+    const scopeType = scope.type === 'TAGS' ? 'SELECTED_TAGS' : scope.type === 'FOLDERS' ? 'SELECTED_FOLDERS' : scope.type;
+    const selectedTags = scope.selectedTags ?? scope.includedByTags;
+    const selectedFolderIds = scope.selectedFolderIds ?? scope.folderIds;
+    if (scopeType === 'SELECTED_TAGS' && !selectedTags?.length) throw new Error('按标签导出需要 selectedTags。');
+    if (scopeType === 'SELECTED_FOLDERS' && !selectedFolderIds?.length) throw new Error('按目录导出需要 selectedFolderIds。');
+    if (scopeType === 'SELECTED_ENDPOINTS' && !scope.selectedEndpointIds?.length) throw new Error('按接口导出需要 selectedEndpointIds。');
     const body = {
-      scope: params.scope ?? { type: 'ALL' },
+      scope: {
+        type: scopeType,
+        excludedByTags: scope.excludedByTags,
+        ...(scopeType === 'SELECTED_TAGS' ? { selectedTags } : {}),
+        ...(scopeType === 'SELECTED_FOLDERS' ? { selectedFolderIds } : {}),
+        ...(scopeType === 'SELECTED_ENDPOINTS' ? { selectedEndpointIds: scope.selectedEndpointIds } : {}),
+      },
       options: params.options ?? {
         includeApifoxExtensionProperties: true,
         addFoldersToTags: true,
@@ -329,6 +362,19 @@ export class ApifoxClient {
       );
     }
 
+    if (params.exportFormat === 'YAML') {
+      if (typeof actualResult !== 'string' || !/^\s*(openapi|swagger)\s*:/m.test(actualResult)) {
+        throw new Error('Apifox 未返回有效的 YAML OpenAPI 文档。');
+      }
+    } else {
+      if (typeof actualResult === 'string') {
+        try { actualResult = JSON.parse(actualResult) as unknown; } catch { throw new Error('Apifox 导出响应不是 JSON。'); }
+      }
+      if (!actualResult || typeof actualResult !== 'object' || !('paths' in actualResult) ||
+        !('openapi' in actualResult || 'swagger' in actualResult)) {
+        throw new Error('Apifox 未返回有效的 OpenAPI 文档（可能是鉴权失败或接口不可用）。');
+      }
+    }
     return actualResult;
   }
 
@@ -341,24 +387,42 @@ export class ApifoxClient {
     }
 
     const body = {
-      input: params.input,
+      input: typeof params.input === 'object' && 'content' in params.input ? params.input.content : params.input,
       options: {
-        endpointOverwriteBehavior: 'SMART_MERGE',
-        schemaOverwriteBehavior: 'SMART_MERGE',
-        updateFolderOfChangedEndpoint: true,
-        prependBasePath: false,
-        intelligentMerge: true,
-        ...params.options,
+        endpointOverwriteBehavior: normalizeOverwriteBehavior(params.options?.endpointOverwriteBehavior ?? 'AUTO_MERGE'),
+        schemaOverwriteBehavior: normalizeOverwriteBehavior(params.options?.schemaOverwriteBehavior ?? 'AUTO_MERGE'),
+        updateFolderOfChangedEndpoint: params.options?.updateFolderOfChangedEndpoint ?? false,
+        prependBasePath: params.options?.prependBasePath ?? false,
+        targetEndpointFolderId: params.options?.targetEndpointFolderId,
+        targetSchemaFolderId: params.options?.targetSchemaFolderId,
+        targetBranchId: params.options?.targetBranchId,
+        moduleId: params.options?.moduleId,
+        deleteUnmatchedResources: false,
       },
     };
 
-    return this.request<ImportOpenApiResponse>(
+    let response: ImportOpenApiResponse;
+    try {
+      response = await this.request<ImportOpenApiResponse>(
       `/projects/${projectId}/import-openapi`,
       {
         method: 'POST',
         body: JSON.stringify(body),
       },
       params.locale
-    );
+      );
+    } finally {
+      invalidateOpenApiCache();
+    }
+    const counters = response?.data?.counters;
+    if (!counters) throw new Error('Apifox 未返回导入计数，无法确认导入结果，请在客户端核实。');
+    if (response.data?.errors?.length) {
+      throw new Error(`Apifox 导入返回错误，可能已部分写入：${JSON.stringify(response.data)}`);
+    }
+    const failed = Object.entries(counters)
+      .filter(([key]) => key.endsWith('Failed'))
+      .reduce((total, [, value]) => total + value, 0);
+    if (failed > 0) throw new Error(`Apifox 导入存在 ${failed} 项失败，可能已部分写入：${JSON.stringify(counters)}`);
+    return response;
   }
 }

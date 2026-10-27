@@ -2,7 +2,7 @@
   "name": "mcp-apifox-server",
   "version": "1.0.3",
   "type": "module",
-  "description": "MCP 服务器：读取项目控制器并与 Apifox 同步 OpenAPI/自动化测试",
+  "description": "MCP 服务器：管理 Apifox 项目和接口、同步 OpenAPI、运行自动化测试",
   "main": "dist/index.js",
   "bin": {
     "mcp-apifox": "dist/cli.js",
@@ -12,7 +12,8 @@
     "build": "tsup src/index.ts src/cli.ts --format esm --dts --out-dir dist",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "test": "vitest",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "test:watch": "vitest --watch",
     "test:coverage": "vitest --coverage",
     "lint": "eslint src/**/*.ts",

@@ -6,19 +6,10 @@ import { z } from 'zod';
 
 import { ApifoxClient } from '../services/apifoxClient.js';
 import type { ImportOpenApiResultCounters } from '../services/apifoxClient.js';
+import { overwriteBehaviorSchema } from '../services/importPolicies.js';
 
-const endpointOverwriteBehaviorEnum = z.enum([
-  'OVERWRITE_EXISTING',
-  'IGNORE_EXISTING',
-  'KEEP_BOTH',
-  'SMART_MERGE',
-]);
-
-const schemaOverwriteBehaviorEnum = z.enum([
-  'OVERWRITE_EXISTING',
-  'IGNORE_EXISTING',
-  'KEEP_BOTH',
-]);
+const endpointOverwriteBehaviorEnum = overwriteBehaviorSchema;
+const schemaOverwriteBehaviorEnum = overwriteBehaviorSchema;
 
 const importInputSchema = {
   projectId: z.string().describe('Apifox 项目 ID，默认读取配置').optional(),
@@ -37,27 +28,35 @@ const importInputSchema = {
     .optional(),
   endpointOverwriteBehavior: endpointOverwriteBehaviorEnum
     .describe('接口覆盖策略')
-    .default('SMART_MERGE'),
+    .default('AUTO_MERGE'),
   schemaOverwriteBehavior: schemaOverwriteBehaviorEnum
     .describe('数据模型覆盖策略')
-    .default('OVERWRITE_EXISTING'),
+    .default('AUTO_MERGE'),
   updateFolderOfChangedEndpoint: z
     .boolean()
     .describe('是否同步更新接口所在目录')
-    .default(true),
+    .default(false),
   prependBasePath: z
     .boolean()
     .describe('是否把 basePath 前缀加入 URL')
     .default(false),
   intelligentMerge: z
     .boolean()
-    .describe('是否启用 Apifox 智能合并（保留中文描述、Mock 等）')
+    .describe('旧参数，仅兼容接收；请使用 endpointOverwriteBehavior=AUTO_MERGE')
     .default(true),
   locale: z.string().describe('API locale, 默认 zh-CN').optional(),
+  targetBranchId: z.number().int().positive().optional().describe('目标分支 ID'),
+  moduleId: z.number().int().positive().optional().describe('目标模块 ID'),
   dryRun: z
     .boolean()
     .describe('若为 true，只返回将要导入的内容，不真正调用 API')
-    .default(false),
+    .default(true),
+  confirm: z
+    .boolean()
+    .default(false)
+    .describe('写入或覆盖前的明确用户确认；dryRun=false 时必填 true'),
+  targetEndpointFolderId: z.number().int().nonnegative().optional(),
+  targetSchemaFolderId: z.number().int().nonnegative().optional(),
 };
 
 const importSchema = z.object(importInputSchema);
@@ -72,6 +71,7 @@ export function registerImportOpenApiTool(server: McpServer): void {
       description:
         '支持直接传入 OpenAPI 字符串或文件路径，可选择覆盖策略与智能合并',
       inputSchema: importInputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     async (args: ImportOpenApiParams) => {
       const payload = args.openapi ?? (await readFileIfNeeded(args.filePath));
@@ -103,18 +103,22 @@ export function registerImportOpenApiTool(server: McpServer): void {
       }
 
       try {
+        if (!args.dryRun && !args.confirm) {
+          throw new Error('导入/覆盖需要用户明确确认；请先 dryRun 预览，再传 dryRun=false 和 confirm=true。');
+        }
         const client = new ApifoxClient();
         const response = await client.importOpenApi({
           projectId: args.projectId,
-          input: {
-            content: payload,
-          },
+          input: payload,
           options: {
             endpointOverwriteBehavior: args.endpointOverwriteBehavior,
             schemaOverwriteBehavior: args.schemaOverwriteBehavior,
             updateFolderOfChangedEndpoint: args.updateFolderOfChangedEndpoint,
             prependBasePath: args.prependBasePath,
-            intelligentMerge: args.intelligentMerge,
+            targetBranchId: args.targetBranchId,
+            moduleId: args.moduleId,
+            targetEndpointFolderId: args.targetEndpointFolderId,
+            targetSchemaFolderId: args.targetSchemaFolderId,
           },
           locale: args.locale,
         });
@@ -168,7 +172,7 @@ async function readFileIfNeeded(filePath?: string): Promise<string | undefined> 
 function formatCounters(
   counters?: ImportOpenApiResultCounters
 ): string {
-  if (!counters) return '已成功触发导入，Apifox 将在客户端显示详细日志。';
+  if (!counters) return '未收到导入统计，无法确认结果，请在 Apifox 客户端核实。';
   const lines = Object.entries(counters)
     .map(([key, value]) => `${key}: ${value}`)
     .join('\n');
